@@ -3,16 +3,53 @@ const bodyParser = require('body-parser');
 const db = require('./models');
 const es6Renderer = require('express-es6-template-engine');
 const bcrypt = require('bcrypt');
+const cookieParser = require('cookie-parser');
+const session = require('express-session');
+const SequelizeStore = require('connect-session-sequelize')(session.Store);
+const store = new SequelizeStore({ db: db.sequelize });
 
 const app = express();
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
+app.use(cookieParser());
+app.use(session({
+  secret: 'secret', // used to sign the cookie
+  resave: false, // update session even w/ no changes
+  saveUninitialized: true, // always create a session
+  store: store,
+}))
+
+store.sync();
+
+app.use((req, res, next) => {
+  console.log('===== USER =====')
+  console.log(req.session.user);
+  console.log('================')
+  next();
+})
 
 app.use(express.static('./public'));
 
 app.engine('html', es6Renderer); // use es6renderer for html view templates
 app.set('views', 'templates'); // look in the 'templates' folder for view templates
 app.set('view engine', 'html'); // set the view engine to use the 'html' views
+
+function checkAuth(req, res, next) {
+  if (req.session.user) {
+    next();
+  } else {
+    res.redirect('/login');
+  }
+}
+
+app.get('/', checkAuth, (req, res) => {
+  res.render('index', {
+    locals: {
+      user: req.session.user
+    }
+  });
+})
 
 app.get('/register', (req, res) => {
   res.render('register', {
@@ -81,18 +118,34 @@ app.post('/login', (req, res) => {
 
       bcrypt.compare(req.body.password, user.password, (err, matched) => {
         if (matched) {
-          res.send('YOU LOGGED IN')
+          req.session.user = user;
+          res.redirect('/');
         } else {
-          res.send('NOPE, WRONG PASSWORD')
+          res.render('login', {
+            locals: {
+              error: 'Incorrect password. Please try again.'
+            }
+          })
         }
         return;
       })
     })
 })
 
+app.get('/logout', (req, res) => {
+  req.session.user = null;
+  res.redirect('/login');
+})
+
+app.use('/api*', checkAuth)
+
 // GET /api/todos
 app.get('/api/todos', (req, res) => {
-  db.Todo.findAll()
+  db.Todo.findAll({
+    where: {
+      UserId: req.session.user.id
+    }
+  })
     .then((todos) => {
       res.json(todos);
     })
@@ -129,7 +182,8 @@ app.post('/api/todos', (req, res) => {
   }
 
   db.Todo.create({
-    name: req.body.name
+    name: req.body.name,
+    UserId: req.session.user.id
   })
     .then((newTodo) => {
       res.json(newTodo);
